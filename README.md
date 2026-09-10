@@ -111,7 +111,32 @@ Valid Records: 10
 Invalid Records: 14
 
 
+## Week 2 Testing
 
+The pipeline was tested with different real-world input scenarios to check reliability and error handling.
+
+Test scenarios included:
+
+- T01: New branch file
+- T02: Header-only file
+- T03: Missing required column
+- T04: Multiple validation errors
+- T05: Cross-file duplicate transaction
+- T06: Non-numeric amount
+- T07: Impossible transaction date
+- T08: Different column order
+- T09: Rerun with the same inputs
+- T10: Unexpected file
+
+All tests passed after investigation and retesting.
+
+During T06, the pipeline initially failed when a non-numeric amount such as ABC was provided. The issue was fixed by safely converting the amount using pd.to_numeric(..., errors="coerce"). After the fix, the pipeline was rerun successfully.
+
+Final Test Output Summary:
+
+Total Records: 32
+Valid Records: 14
+Invalid Records: 18
 
 
 

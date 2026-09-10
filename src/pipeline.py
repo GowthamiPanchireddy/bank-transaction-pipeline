@@ -98,7 +98,13 @@ print("\nMissing Amounts:")
 
 print(combined_df[missing_amount])
 
-invalid_amount = combined_df["amount"].notna() & (combined_df["amount"] <= 0)
+numeric_amount = pd.to_numeric(
+    combined_df["amount"],
+    errors="coerce"
+)
+
+invalid_amount = numeric_amount.notna() & (numeric_amount <= 0)
+
 
 print("\nInvalid Amounts:")
 
