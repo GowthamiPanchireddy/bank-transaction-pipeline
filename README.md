@@ -1,142 +1,200 @@
-# Bank Transaction Data Validation Pipeline
+# Bank Transaction Data Quality Pipeline
 
-## Project Overview
-
-This project is a Python-based data validation pipeline for processing bank transaction CSV files.
-
-The pipeline reads transaction data from multiple branch files, combines the data, validates it based on business rules, and generates valid, invalid, and summary output files.
-
-## Input Data
-
-The pipeline reads all CSV files from the `input` folder.
-
-Example:
-
-- BR001_20260906_TRANSACTION.csv
-- BR002_20260906_TRANSACTION.csv
-- BR003_20260906_TRANSACTION.csv
-
-The pipeline automatically detects CSV files from the input folder, so new files with the same structure can be processed without changing the code.
-
-## Required Columns
-
-Each input CSV file must contain the following columns:
-
-- transaction_id
-- account_id
-- transaction_date
-- transaction_type
-- amount
-- currency
-
-## Validation Rules
-
-The pipeline validates the following rules:
-
-1. Transaction ID must not be missing.
-2. Account ID must not be missing.
-3. Transaction date must be in the correct format.
-4. Transaction type must be CREDIT or DEBIT.
-5. Amount must be present.
-6. Amount must be numeric.
-7. Amount must be greater than 0.
-8. Currency must be USD.
-9. Transaction ID must be unique across all input files.
-
-If a record violates multiple rules, all applicable errors are stored in the `error_reason` column.
-
-## Output Files
-
-The pipeline generates three files in the `output` folder:
-
-### valid_transactions.csv
-
-Contains records that passed all validation rules.
-
-### invalid_transactions.csv
-
-Contains records that failed one or more validation rules.
-
-The `error_reason` column contains the reason or reasons why a record is invalid.
-
-### summary.csv
-
-Contains the total number of records, valid records, and invalid records.
+A Python-based data quality pipeline for validating bank transaction CSV files, handling duplicate transactions, generating valid and invalid outputs, and producing data quality and operational summaries.
 
 ## Project Structure
 
 ```text
 bank-transaction-pipeline/
-│
 ├── input/
-│   ├── BR001_20260906_TRANSACTION.csv
-│   ├── BR002_20260906_TRANSACTION.csv
-│   └── BR003_20260906_TRANSACTION.csv
-│
 ├── output/
-│   ├── valid_transactions.csv
-│   ├── invalid_transactions.csv
-│   └── summary.csv
-│
 ├── src/
-│   └── pipeline.py
-│
+│   ├── pipeline.py
+│   └── validation.py
+├── tests/
+│   ├── test_validation.py
+│   └── test_pipeline.py
 ├── requirements.txt
 └── README.md
 
-Technologies Used: 
-Python
-Pandas
-CSV
-Git
-GitHub
+*** Required Input Columns:-
+ The pipeline expects the following columns:
 
-Installation:
+  transaction_id
+  account_id
+  transaction_date
+  transaction_type
+  amount
+  currency
 
-Install the required Python package using:
-     pip install -r requirements.txt
+*** Validation Rules:-The pipeline checks:
 
-How to Run:
+  Transaction ID is not missing
+  Account ID is not missing
+  Transaction date is present and in the correct format
+  Transaction type is CREDIT or DEBIT
+  Amount is numeric and greater than 0
+  Currency is USD
+  Transaction ID is unique across all input files.
+Multiple validation errors for the same record are preserved in the error_reason column.
 
-Run the pipeline from the project root folder using:
+
+### Week 2 Testing:-
+The pipeline was tested with different real-world input scenarios:
+
+  New branch file
+  Header-only file
+  Missing required column
+  Multiple validation errors
+  Cross-file duplicate transaction
+  Non-numeric amount
+  Impossible transaction date
+  Different column order
+  Rerun with the same inputs
+  Unexpected file
+During Week 2, a non-numeric amount such as ABC initially caused the pipeline to fail. This was fixed using safe numeric conversion with pd.to_numeric(..., errors="coerce").
+
+
+### Week 3 Pipeline Hardening:- Week 3 focused on improving the existing Week 2 pipeline rather than rebuilding it.
+
+*** Refactoring:
+The pipeline was divided into reusable functions for:
+
+  CSV file discovery
+  File reading
+  Schema checking
+  Row validation
+  Duplicate handling
+  Separating valid and invalid records
+  Output writing
+  Summary generation
+  Data quality summary generation
+Constants are used for important paths and required columns.
+
+
+*** Data Quality Summary:-
+The pipeline generates:
+
+   output/dq_summary.csv
+
+The DQ summary contains:
+
+   Files discovered
+   Files read
+   Files rejected
+   Total records
+   Valid records
+   Invalid records
+   Rejection rate
+   Duplicate records
+   Rejected file names
+This provides visibility into both row-level and file-level data quality problems.
+
+*** Logging:- Python's built-in logging module is used for operational evidence.
+Logs are written to:
+
+  output/pipeline.log
+
+The pipeline records:
+
+  Pipeline start and completion
+  File discovery
+  File reading
+  Empty/header-only files
+  Schema rejection
+  Unreadable files
+  No input files
+  All candidate files rejected
+
+Different log levels are used:
+
+  INFO
+  WARNING
+  ERROR
+
+*** Running the Pipeline
+From the project root:
+    
     python src/pipeline.py
-The processed output files will be generated automatically in the output folder.
-
-Current Output Summary:
-
-For the provided input files:
-
-Total Records: 24
-Valid Records: 10
-Invalid Records: 14
 
 
-## Week 2 Testing
+The pipeline creates:
 
-The pipeline was tested with different real-world input scenarios to check reliability and error handling.
+output/
+├── valid_transactions.csv
+├── invalid_transactions.csv
+├── summary.csv
+├── dq_summary.csv
+└── pipeline.log
 
-Test scenarios included:
+*** Running Tests
+Use Python 3.10:
+   python -m pytest -v
 
-- T01: New branch file
-- T02: Header-only file
-- T03: Missing required column
-- T04: Multiple validation errors
-- T05: Cross-file duplicate transaction
-- T06: Non-numeric amount
-- T07: Impossible transaction date
-- T08: Different column order
-- T09: Rerun with the same inputs
-- T10: Unexpected file
+Expected result:
+   6 passed
 
-All tests passed after investigation and retesting.
+*** Testing Strategy:- 
+ The Week 3 test suite contains
+   Unit Tests:
+    Tests for amount validation:
 
-During T06, the pipeline initially failed when a non-numeric amount such as ABC was provided. The issue was fixed by safely converting the amount using pd.to_numeric(..., errors="coerce"). After the fix, the pipeline was rerun successfully.
+        Valid amount
+        Negative amount
+        Non-numeric amount
+        Integration Tests
 
-Final Test Output Summary:
+    Tests for:
 
-Total Records: 32
-Valid Records: 14
-Invalid Records: 18
+        Cross-file duplicate transaction handling
+        Multiple validation errors
 
 
+    Regression Test:- The original three input files are processed through the pipeline functions.
+     Expected result:
+
+        Total Records: 24
+        Valid Records: 10
+        Invalid Records: 14
+This confirms that Week 3 hardening did not break the original Week 2 behavior.
+
+*** Current DQ Result:-
+ With the current test input folder:
+
+   Files Discovered: 11
+   Files Read: 9
+   Files Rejected: 2
+   Total Records: 32
+   Valid Records: 14
+   Invalid Records: 18
+   Rejection Rate: 0.5625
+   Duplicate Records: 4
+The rejected files are also recorded in dq_summary.csv.
+
+
+### Week 2 to Week 3 Changes:- Week 2 focused mainly on validation and testing different data scenarios.
+    Week 3 improved the pipeline by adding:
+
+   Reusable pipeline functions
+   Data quality summary
+   Operational logging
+   File-level rejection tracking
+   Automated pytest tests
+   Meaningful regression testing
+These changes make the pipeline easier to maintain, test, and monitor.
+
+
+### Limitations and Future Improvements:-
+
+1.The pipeline currently uses CSV files and local folders only. Future versions could support configurable input and output locations.
+2.The DQ summary currently provides run-level metrics. Future versions could provide more detailed validation failure counts by individual rule and source branch.
+
+
+### Reflection:-
+
+Week 3 helped me understand that a working pipeline also needs good structure, testing, monitoring, and clear data quality information. I refactored the Week 2 pipeline into reusable functions so that file discovery, schema checking, validation, duplicate handling, output writing, and summary creation are separated. I also added logging to provide operational evidence about what happened during each run. The DQ summary makes it easier to understand how many files were discovered, accepted, rejected, and how many records were valid or invalid.
+
+Testing was an important part of the hardening process. I added unit tests for amount validation, including valid, negative, and non-numeric values. I also added tests for cross-file duplicates and multiple validation errors. The regression test processes the original three files and confirms the expected result of 24 total records, 10 valid records, and 14 invalid records.
+
+One important lesson was that defensive handling of bad data is necessary because a single unexpected value should not stop the complete pipeline. Overall, Week 3 improved the reliability, maintainability, observability, and testability of the existing pipeline.
 

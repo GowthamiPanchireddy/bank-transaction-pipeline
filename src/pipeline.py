@@ -1,19 +1,19 @@
 from pathlib import Path
+import logging
 
 import pandas as pd
 
+from src.validation import validate_row
+
+
+# -----------------------------
+# Constants
+# -----------------------------
+
 INPUT_FOLDER = Path("input")
+OUTPUT_FOLDER = Path("output")
 
-csv_files = list(INPUT_FOLDER.glob("*.csv"))
-
-print("CSV files found:")
-
-for file in csv_files:
-
-    print(file)
-
-
-required_columns = [
+REQUIRED_COLUMNS = [
     "transaction_id",
     "account_id",
     "transaction_date",
@@ -22,190 +22,444 @@ required_columns = [
     "currency"
 ]
 
-dataframes = []
 
-for file in csv_files:
+# -----------------------------
+# Output folder
+# -----------------------------
 
-    df = pd.read_csv(file)
+OUTPUT_FOLDER.mkdir(exist_ok=True)
 
-    missing_columns = [
-        column for column in required_columns
+
+# -----------------------------
+# Logging setup
+# -----------------------------
+
+logging.basicConfig(
+    filename=OUTPUT_FOLDER / "pipeline.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+
+logger.info("Pipeline started")
+
+
+# -----------------------------
+# File discovery
+# -----------------------------
+
+def discover_csv_files(input_folder):
+    logger.info("CSV file discovery started")
+
+    csv_files = list(input_folder.glob("*.csv"))
+
+    for file in csv_files:
+        logger.info(f"File discovered: {file.name}")
+
+    return csv_files
+
+
+# -----------------------------
+# Schema checking
+# -----------------------------
+
+def check_required_columns(df):
+    return [
+        column
+        for column in REQUIRED_COLUMNS
         if column not in df.columns
     ]
 
-    if missing_columns:
-        print(f"\nMissing columns in {file}:")
-        print(missing_columns)
-    else:
+
+# -----------------------------
+# File reading
+# -----------------------------
+
+def read_csv_files(csv_files):
+    dataframes = []
+    rejected_files = []
+
+    for file in csv_files:
+
+        logger.info(f"Reading file: {file.name}")
+
+        try:
+            df = pd.read_csv(file)
+
+        except (
+            pd.errors.ParserError,
+            UnicodeDecodeError,
+            OSError
+        ) as error:
+
+            logger.error(
+                f"Could not read file: {file.name} - {error}"
+            )
+
+            rejected_files.append(file.name)
+            continue
+
+        missing_columns = check_required_columns(df)
+
+        if missing_columns:
+
+            print(f"\nMissing columns in {file}:")
+            print(missing_columns)
+
+            logger.warning(
+                f"Schema rejected: {file.name} - "
+                f"Missing columns: {missing_columns}"
+            )
+
+            rejected_files.append(file.name)
+            continue
+
+        if df.empty:
+
+            logger.warning(
+                f"Empty/header-only file: {file.name}"
+            )
+
         dataframes.append(df)
 
-print("\nCSV files read successfully!")
+        logger.info(
+            f"File read successfully: {file.name}"
+        )
 
-for df in dataframes:
+    return dataframes, rejected_files
 
-    print(df.shape)
 
-combined_df = pd.concat(dataframes, ignore_index=True)
+# -----------------------------
+# Duplicate handling
+# -----------------------------
 
-duplicate_ids = combined_df[
-    combined_df["transaction_id"].duplicated(keep=False)
-]
+def find_duplicate_records(df):
 
-print("\nDuplicate transaction IDs:")
+    duplicate_mask = df[
+        "transaction_id"
+    ].duplicated(
+        keep=False
+    )
 
-print(duplicate_ids)
+    return duplicate_mask
 
 
-missing_transaction_id = combined_df["transaction_id"].isna()
+# -----------------------------
+# Row validation
+# -----------------------------
 
-print("\nMissing Transaction IDs:")
+def validate_dataframe(df):
 
-print(combined_df[missing_transaction_id])
+    df = df.copy()
 
-missing_account_id = combined_df["account_id"].isna()
+    df["error_reason"] = ""
 
-print("\nMissing Account IDs:")
+    for index, row in df.iterrows():
 
-print(combined_df[missing_account_id])
+        errors = validate_row(row)
 
-missing_transaction_date = combined_df["transaction_date"].isna()
+        if errors:
 
-print("\nMissing Transaction Dates:")
+            df.loc[
+                index,
+                "error_reason"
+            ] = "; ".join(errors)
 
-print(combined_df[missing_transaction_date])
+    return df
 
-invalid_transaction_dates = pd.to_datetime(
-    combined_df["transaction_date"],
-    format="%Y-%m-%d",
-    errors="coerce"
-).isna()
 
-print("\nInvalid Transaction Dates:")
+# -----------------------------
+# Add duplicate errors
+# -----------------------------
 
-print(combined_df[invalid_transaction_dates])
+def add_duplicate_errors(df):
 
-invalid_transaction_type = ~combined_df["transaction_type"].isin(
-    ["CREDIT", "DEBIT"]
-)
+    duplicate_mask = find_duplicate_records(df)
 
-print("\nInvalid Transaction Types:")
+    df.loc[
+        duplicate_mask,
+        "error_reason"
+    ] = df.loc[
+        duplicate_mask,
+        "error_reason"
+    ].apply(
+        lambda error:
+        (
+            error + "; Duplicate Transaction ID"
+            if error
+            else "Duplicate Transaction ID"
+        )
+    )
 
-print(combined_df[invalid_transaction_type])
+    return df
 
-missing_amount = combined_df["amount"].isna()
 
-print("\nMissing Amounts:")
+# -----------------------------
+# Separate valid / invalid
+# -----------------------------
 
-print(combined_df[missing_amount])
+def separate_valid_invalid(df):
 
-numeric_amount = pd.to_numeric(
-    combined_df["amount"],
-    errors="coerce"
-)
+    valid_df = df[
+        df["error_reason"] == ""
+    ].copy()
 
-invalid_amount = numeric_amount.notna() & (numeric_amount <= 0)
+    invalid_df = df[
+        df["error_reason"] != ""
+    ].copy()
 
+    return valid_df, invalid_df
 
-print("\nInvalid Amounts:")
 
-print(combined_df[invalid_amount])
+# -----------------------------
+# Write output files
+# -----------------------------
 
-invalid_currency = combined_df["currency"] != "USD"
+def write_output_files(
+    valid_df,
+    invalid_df,
+    output_folder
+):
 
-print("\nInvalid Currencies:")
+    valid_df.to_csv(
+        output_folder / "valid_transactions.csv",
+        index=False
+    )
 
-print(combined_df[invalid_currency])
+    invalid_df.to_csv(
+        output_folder / "invalid_transactions.csv",
+        index=False
+    )
 
-non_numeric_amount = pd.to_numeric(
-    combined_df["amount"],
-    errors="coerce"
-).isna() & combined_df["amount"].notna()
+    logger.info("Valid and invalid output files created")
 
-print("\nNon-Numeric Amounts:")
 
-print(combined_df[non_numeric_amount])
+# -----------------------------
+# Create summary
+# -----------------------------
 
+def create_summary(
+    combined_df,
+    valid_df,
+    invalid_df,
+    output_folder
+):
 
-combined_df["error_reason"] = ""
+    summary_df = pd.DataFrame({
 
+        "metric": [
+            "Total Records",
+            "Valid Records",
+            "Invalid Records"
+        ],
 
-combined_df.loc[missing_transaction_id, "error_reason"] += "Transaction ID is missing; "
+        "count": [
+            len(combined_df),
+            len(valid_df),
+            len(invalid_df)
+        ]
+    })
 
+    summary_df.to_csv(
+        output_folder / "summary.csv",
+        index=False
+    )
 
-duplicate_mask = combined_df["transaction_id"].duplicated(keep=False)
-combined_df.loc[duplicate_mask, "error_reason"] += "Duplicate Transaction ID; "
+    return summary_df
 
 
-combined_df.loc[missing_account_id, "error_reason"] += "Account ID is missing; "
+# -----------------------------
+# Create DQ summary
+# -----------------------------
 
+def create_dq_summary(
+    csv_files,
+    dataframes,
+    rejected_files,
+    combined_df,
+    valid_df,
+    invalid_df,
+    output_folder
+):
 
-combined_df.loc[invalid_transaction_dates, "error_reason"] += "Invalid transaction date; "
+    duplicate_mask = find_duplicate_records(
+        combined_df
+    )
 
+    dq_summary_df = pd.DataFrame({
 
-combined_df.loc[invalid_transaction_type, "error_reason"] += "Invalid transaction type; "
+        "metric": [
 
+            "Files Discovered",
+            "Files Read",
+            "Files Rejected",
+            "Total Records",
+            "Valid Records",
+            "Invalid Records",
+            "Rejection Rate",
+            "Duplicate Records",
+            "Rejected Files"
+        ],
 
-combined_df.loc[missing_amount, "error_reason"] += "Amount is missing; "
-combined_df.loc[invalid_amount, "error_reason"] += "Amount must be greater than 0; "
-combined_df.loc[non_numeric_amount, "error_reason"] += "Amount must be numeric; "
+        "value": [
 
+            len(csv_files),
 
-combined_df.loc[invalid_currency, "error_reason"] += "Invalid currency; "
+            len(dataframes),
 
+            len(rejected_files),
 
-combined_df["error_reason"] = combined_df["error_reason"].str.rstrip("; ")
+            len(combined_df),
 
+            len(valid_df),
 
+            len(invalid_df),
 
-valid_df = combined_df[combined_df["error_reason"] == ""].copy()
+            (
+                len(invalid_df) / len(combined_df)
+                if len(combined_df) > 0
+                else 0
+            ),
 
-invalid_df = combined_df[combined_df["error_reason"] != ""].copy()
+            duplicate_mask.sum(),
 
-print("\nValid Records:")
-print(valid_df)
+            ", ".join(rejected_files)
+        ]
+    })
 
-print("\nInvalid Records:")
-print(invalid_df)
+    dq_summary_df.to_csv(
+        output_folder / "dq_summary.csv",
+        index=False
+    )
 
-print("\nCombined data:")
+    return dq_summary_df
 
-print(combined_df)
 
+# -----------------------------
+# Main pipeline
+# -----------------------------
 
+def run_pipeline():
 
-valid_df.to_csv(
-    "output/valid_transactions.csv",
-    index=False
-)
+    csv_files = discover_csv_files(
+        INPUT_FOLDER
+    )
 
-invalid_df.to_csv(
-    "output/invalid_transactions.csv",
-    index=False
-)
+    print("CSV files found:")
 
-print("\nOutput files created successfully!")
+    for file in csv_files:
+        print(file)
 
+    if not csv_files:
 
+        logger.error(
+            "No CSV files found in input folder"
+        )
 
-summary_df = pd.DataFrame({
-    "metric": [
-        "Total Records",
-        "Valid Records",
-        "Invalid Records"
-    ],
-    "count": [
-        len(combined_df),
-        len(valid_df),
-        len(invalid_df)
-    ]
-})
+        print(
+            "No CSV files found in input folder."
+        )
 
+        return
 
+    dataframes, rejected_files = read_csv_files(
+        csv_files
+    )
 
-summary_df.to_csv(
-    "output/summary.csv",
-    index=False
-)
+    print("\nCSV files read successfully!")
 
-print("\nSummary file created successfully!")
-print(summary_df)
+    for df in dataframes:
+        print(df.shape)
+
+    if not dataframes:
+
+        logger.error(
+            "All candidate files were rejected"
+        )
+
+        print(
+            "All candidate files were rejected."
+        )
+
+        return
+
+    combined_df = pd.concat(
+        dataframes,
+        ignore_index=True
+    )
+
+    # Validate rows
+    combined_df = validate_dataframe(
+        combined_df
+    )
+
+    # Handle duplicates across all files
+    combined_df = add_duplicate_errors(
+        combined_df
+    )
+
+    # Separate valid and invalid
+    valid_df, invalid_df = separate_valid_invalid(
+        combined_df
+    )
+
+    print("\nValid Records:")
+    print(valid_df)
+
+    print("\nInvalid Records:")
+    print(invalid_df)
+
+    # Write outputs
+    write_output_files(
+        valid_df,
+        invalid_df,
+        OUTPUT_FOLDER
+    )
+
+    print(
+        "\nOutput files created successfully!"
+    )
+
+    # Summary
+    summary_df = create_summary(
+        combined_df,
+        valid_df,
+        invalid_df,
+        OUTPUT_FOLDER
+    )
+
+    # DQ summary
+    dq_summary_df = create_dq_summary(
+        csv_files,
+        dataframes,
+        rejected_files,
+        combined_df,
+        valid_df,
+        invalid_df,
+        OUTPUT_FOLDER
+    )
+
+    print(
+        "\nDQ summary file created successfully!"
+    )
+
+    print(dq_summary_df)
+
+    print(
+        "\nSummary file created successfully!"
+    )
+
+    print(summary_df)
+
+    logger.info(
+        "Pipeline completed successfully"
+    )
+
+
+# -----------------------------
+# Run
+# -----------------------------
+
+if __name__ == "__main__":
+    run_pipeline()
