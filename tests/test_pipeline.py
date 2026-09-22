@@ -34,13 +34,12 @@ def test_cross_file_duplicate():
         ignore_index=True
     )
 
-    duplicate_mask = combined[
-        "transaction_id"
-    ].duplicated(
-        keep=False
-    )
+    combined = validate_dataframe(combined)
 
-    assert duplicate_mask.sum() == 2
+    result = add_duplicate_errors(combined)
+
+    assert "Duplicate Transaction ID" in result.loc[0, "error_reason"]
+    assert "Duplicate Transaction ID" in result.loc[1, "error_reason"]
 
 
 def test_multiple_validation_errors():
